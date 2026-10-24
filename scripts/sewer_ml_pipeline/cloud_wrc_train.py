@@ -72,6 +72,11 @@ def main():
         if a.smoke:
             output=model(tf.zeros((1,299,299,3),tf.float32),training=False)
             if tuple(output.shape)!=(1,len(TARGETS)): raise RuntimeError('WRc smoke output contract failed')
+            smoke_path=Path(temp)/'smoke-model.keras'
+            model.save(smoke_path)
+            restored=tf.keras.models.load_model(smoke_path,compile=False)
+            restored_output=restored(tf.zeros((1,299,299,3),tf.float32),training=False)
+            if tuple(restored_output.shape)!=(1,len(TARGETS)): raise RuntimeError('WRc save/reload smoke contract failed')
             print(json.dumps({'smoke':'SUCCEEDED','parameters':model.count_params(),'rights':decision})); return
         gpu_devices=require_gpu(tf)
         split_uris={'train':a.train,'early_stop':a.early_stop,'threshold_tune':a.threshold_tune,'dev_report':a.dev_report}
@@ -95,14 +100,34 @@ def main():
             loss=-(weight_tensor*y_true*tf.math.log(y_pred)+(1.0-y_true)*tf.math.log(1.0-y_pred))
             return tf.reduce_mean(loss,axis=-1)
         weighted_binary_crossentropy.__name__='weighted_binary_crossentropy'
-        phase1_callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss',patience=3,restore_best_weights=True)]
+        checkpoint_bucket_name,checkpoint_prefix=split_gs(a.output_prefix)
+        checkpoint_bucket=client.bucket(checkpoint_bucket_name)
+        class DurableCheckpoint(tf.keras.callbacks.Callback):
+            def __init__(self,phase):
+                super().__init__(); self.phase=phase; self.best=float('inf')
+                self.latest_path=Path(temp)/f'{phase}-latest.weights.h5'
+                self.best_path=Path(temp)/f'{phase}-best.weights.h5'
+            def upload(self,path,name):
+                checkpoint_bucket.blob(f"{checkpoint_prefix.rstrip('/')}/checkpoints/{name}").upload_from_filename(path)
+            def on_epoch_end(self,epoch,logs=None):
+                logs=logs or {}; value=float(logs.get('val_loss',float('inf')))
+                self.model.save_weights(self.latest_path)
+                self.upload(self.latest_path,f'{self.phase}-latest.weights.h5')
+                if value < self.best:
+                    self.best=value; self.model.save_weights(self.best_path)
+                    self.upload(self.best_path,f'{self.phase}-best.weights.h5')
+                state={'phase':self.phase,'completed_epoch':int(epoch+1),'best_val_loss':self.best,'metrics':{key:float(item) for key,item in logs.items()}}
+                checkpoint_bucket.blob(f"{checkpoint_prefix.rstrip('/')}/checkpoints/{self.phase}-state.json").upload_from_string(json.dumps(state,indent=2),content_type='application/json')
+        phase1_callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss',patience=3,restore_best_weights=True),DurableCheckpoint('phase1')]
         model.compile(optimizer=tf.keras.optimizers.Adam(5e-4),loss=weighted_binary_crossentropy,metrics=[tf.keras.metrics.AUC(multi_label=True,name='auc')])
         first=max(1,min(3,a.epochs//3)); history1=model.fit(train,validation_data=early,epochs=first,callbacks=phase1_callbacks)
         unfrozen=configure_controlled_unfreeze(model,tf.keras.layers.BatchNormalization)
-        phase2_callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss',patience=3,restore_best_weights=True)]
+        phase2_callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss',patience=3,restore_best_weights=True),DurableCheckpoint('phase2')]
         model.compile(optimizer=tf.keras.optimizers.Adam(1e-5),loss=weighted_binary_crossentropy,metrics=[tf.keras.metrics.AUC(multi_label=True,name='auc')])
         history2=model.fit(train,validation_data=early,initial_epoch=first,epochs=a.epochs,callbacks=phase2_callbacks)
-        out=Path(temp)/'out'; out.mkdir(); model.save(out/'model.keras',include_optimizer=False)
+        out=Path(temp)/'out'; out.mkdir()
+        export_model=tf.keras.Model(inputs=model.inputs,outputs=model.outputs,name=model.name)
+        export_model.save(out/'model.keras')
         card={'model_id':'wrc-inceptionresnetv2-v3-candidate','config_id':a.config_id,'class_order':list(TARGETS),'split_counts':{k:len(v) for k,v in split_rows.items()},'class_positive_weights':{code:float(positive_weights[i]) for i,code in enumerate(TARGETS)},'gpu_devices':gpu_devices,'unfrozen_backbone_layers':unfrozen,'production_approved':False,'approval_gate':'AWAITING_YOUR_APPROVAL','history':merge_histories(history1,history2)}
         (out/'model_card.json').write_text(json.dumps(card,indent=2)); upload_tree(client,out,a.output_prefix)
         print(json.dumps({'trained':True,'output':a.output_prefix,'approval_gate':'AWAITING_YOUR_APPROVAL'}))
