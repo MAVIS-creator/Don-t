@@ -10,6 +10,27 @@ const POOL_ID = process.env.GCP_WORKLOAD_IDENTITY_POOL_ID || 'vercel'
 const PROVIDER_ID = process.env.GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID || 'vercel-production'
 const SERVICE_ACCOUNT = process.env.GCP_SERVICE_ACCOUNT_EMAIL || 'joint-inspect-vercel-invoker@joint-inspection-510310.iam.gserviceaccount.com'
 type Payload = Record<string, unknown>
+const GITHUB_REPOSITORY = process.env.GITHUB_CONTROL_REPOSITORY || 'Ifeoyewole/Don-t'
+
+async function callGitHub(path: string, method: 'GET' | 'POST', requestBody?: Payload) {
+  const token = process.env.GITHUB_CONTROL_TOKEN
+  if (!token) throw new Error('GITHUB_CONTROL_TOKEN is not configured')
+  const response = await fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(requestBody ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: requestBody ? JSON.stringify(requestBody) : undefined,
+    signal: AbortSignal.timeout(20_000),
+  })
+  const text = await response.text()
+  let payload: Payload
+  try { payload = text ? JSON.parse(text) as Payload : {} } catch { payload = { error: 'GitHub returned an invalid response' } }
+  return { status: response.status, payload }
+}
 
 function send(res: ServerResponse, status: number, body: Payload) {
   const data = JSON.stringify(body)
@@ -110,13 +131,59 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
   if (!authenticated(req)) return send(res, 401, { authenticated: false, error: 'Operator authentication required' })
 
+  if (action === 'github_inventory' && req.method === 'GET') {
+    try {
+      const [pulls, workflows] = await Promise.all([
+        callGitHub('/pulls?state=open&per_page=50', 'GET'),
+        callGitHub('/actions/workflows?per_page=100', 'GET'),
+      ])
+      if (pulls.status >= 400) return send(res, pulls.status, pulls.payload)
+      if (workflows.status >= 400) return send(res, workflows.status, workflows.payload)
+      return send(res, 200, { repository: GITHUB_REPOSITORY, pulls: pulls.payload, workflows: workflows.payload })
+    } catch (error) {
+      return send(res, 502, { error: error instanceof Error ? error.message : 'GitHub request failed' })
+    }
+  }
+  if (['github_dispatch', 'github_issue'].includes(action) && req.method === 'POST') {
+    try {
+      const input = await body(req, 64 * 1024)
+      if (action === 'github_dispatch') {
+        const workflow = String(input.workflow_id || '')
+        const ref = String(input.ref || '')
+        const expected = `github_dispatch:${workflow}:${ref}`
+        if (!workflow || !ref || input.confirmation !== expected) return send(res, 409, { error: `Confirmation must exactly equal ${expected}` })
+        const result = await callGitHub(`/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, 'POST', { ref, inputs: input.inputs || {} })
+        return send(res, result.status, result.payload)
+      }
+      const title = String(input.title || '').trim()
+      const expected = `github_issue:${title}`
+      if (!title || input.confirmation !== expected) return send(res, 409, { error: `Confirmation must exactly equal ${expected}` })
+      const result = await callGitHub('/issues', 'POST', { title, body: String(input.body || '') })
+      return send(res, result.status, result.payload)
+    } catch (error) {
+      return send(res, 502, { error: error instanceof Error ? error.message : 'GitHub request failed' })
+    }
+  }
+
   const source = requestUrl.searchParams.get('source') || 'build'
   if (!['build', 'batch', 'run'].includes(source)) return send(res, 400, { error: 'Unsupported log source' })
-  const allowed = { status: ['/status', 'GET'], report: ['/report', 'GET'], diagnostics: ['/diagnostics', 'GET'], logs: [`/logs?source=${source}&limit=150`, 'GET'], run: ['/run', 'POST'], upload: ['/upload', 'POST'] } as const
+  const prefix = encodeURIComponent(requestUrl.searchParams.get('prefix') || '')
+  const service = encodeURIComponent(requestUrl.searchParams.get('service') || '')
+  const region = encodeURIComponent(requestUrl.searchParams.get('region') || '')
+  const allowed = {
+    status: ['/status', 'GET'],
+    report: ['/report', 'GET'],
+    diagnostics: ['/diagnostics', 'GET'],
+    logs: [`/logs?source=${source}&limit=150`, 'GET'],
+    inventory: [`/inventory?prefix=${prefix}&service=${service}&region=${region}`, 'GET'],
+    run: ['/run', 'POST'],
+    upload: ['/upload', 'POST'],
+    command: ['/command', 'POST'],
+  } as const
   const target = allowed[action as keyof typeof allowed]
   if (!target || req.method !== target[1]) return send(res, 405, { error: 'Operation is not allowed' })
   try {
-    const requestBody = action === 'upload' ? await body(req, 3 * 1024 * 1024) : undefined
+    const requestBody = ['upload', 'command'].includes(action) ? await body(req, action === 'upload' ? 3 * 1024 * 1024 : 64 * 1024) : undefined
     const result = await callController(target[0], target[1], requestBody)
     return send(res, result.status, result.payload)
   } catch (error) {

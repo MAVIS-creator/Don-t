@@ -14,8 +14,10 @@ from google.api_core.exceptions import PreconditionFailed
 
 try:
     from .engine import FinancialPolicy, Snapshot, decide
+    from .cloud_operations import CloudOperations, OperationError
 except ImportError:  # Cloud Run source root
     from engine import FinancialPolicy, Snapshot, decide
+    from cloud_operations import CloudOperations, OperationError
 
 
 PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "joint-inspection-510310")
@@ -26,6 +28,9 @@ LOCK_TTL_SECONDS = int(os.getenv("LOCK_TTL_SECONDS", "840"))
 UPLOAD_PREFIX = os.getenv("UPLOAD_PREFIX", "operator-uploads")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024)))
 app = Flask(__name__)
+
+def cloud() -> CloudOperations:
+    return CloudOperations(PROJECT, STATE_BUCKET)
 
 
 def utcnow() -> datetime:
@@ -129,17 +134,25 @@ def save_status(status: dict[str, Any]) -> None:
 
 def read_status() -> dict[str, Any]:
     blob = _json_blob("status.json")
-    if not blob.exists():
-        return {"state": "DISCOVERING", "reason": "Controller inventory has not run yet.", "submission_enabled": SUBMISSION_ENABLED, "jobs": []}
-    status = json.loads(blob.download_as_text())
+    status = json.loads(blob.download_as_text()) if blob.exists() else {
+        "state": "DISCOVERING", "reason": "Controller inventory has not run yet.",
+        "submission_enabled": SUBMISSION_ENABLED, "jobs": [],
+    }
+    provider = cloud()
+    inventory = provider.inventory()
     pipeline_blob = _json_blob("pipeline-status.json")
-    if pipeline_blob.exists():
-        status["pipeline"] = json.loads(pipeline_blob.download_as_text())
+    stored_pipeline = json.loads(pipeline_blob.download_as_text()) if pipeline_blob.exists() else {}
+    status["pipeline"] = provider.reconcile_pipeline(stored_pipeline, inventory)
+    status["inventory"] = inventory
+    status["jobs"] = inventory.get("batch_jobs", status.get("jobs", []))
+    status["provider_verified_at"] = inventory.get("verified_at")
+    status["provider_inventory_complete"] = inventory.get("complete", False)
     status["max_active_gpu_jobs"] = int(os.getenv("MAX_ACTIVE_GPU_JOBS", "1"))
     status["required_global_gpu_quota"] = float(os.getenv("REQUIRED_GLOBAL_GPU_QUOTA", "1"))
     status["scheduler_interval_minutes"] = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "15"))
+    if inventory.get("errors"):
+        status["reason"] = "Live GCP inventory is incomplete; no missing provider is shown as healthy."
     return status
-
 
 def recent_logs(source: str, limit: int) -> list[dict[str, Any]]:
     filters = {
@@ -213,8 +226,8 @@ def run_controller() -> dict[str, Any]:
             "jobs": discovered_jobs,
             "checkpoint": snapshot.checkpoint,
         }
-        # Mutation is deliberately unavailable until every fail-closed gate passes.
-        # Batch submit/cancel support is added only when SUBMISSION_ENABLED is approved.
+        # Preflight records a decision only. Mutations are separate,
+        # confirmation-gated operations exposed through /command.
         save_status(status)
         return status
     finally:
@@ -279,6 +292,32 @@ def upload_endpoint():
     blob.metadata = {"execution_allowed": "false", "uploaded_via": "jointinspect-code-console"}
     blob.upload_from_string(content, content_type=str(payload.get("content_type") or "application/octet-stream"), if_generation_match=0)
     return jsonify({"uploaded": True, "gcs_uri": f"gs://{STATE_BUCKET}/{object_name}", "bytes": len(content), "execution_allowed": False})
+
+
+@app.get("/inventory")
+def inventory_endpoint():
+    provider = cloud()
+    prefix = request.args.get("prefix", "")
+    service = request.args.get("service")
+    region = request.args.get("region")
+    result = provider.inventory()
+    result["objects"] = provider.objects(prefix)
+    if service and region:
+        result["revisions"] = provider.run_revisions(service, region)
+    return jsonify(result)
+
+
+@app.post("/command")
+def command_endpoint():
+    payload = request.get_json(silent=True) or {}
+    action = str(payload.get("action", ""))
+    try:
+        return jsonify(cloud().command(action, payload))
+    except OperationError as exc:
+        return jsonify({"error": str(exc), "action": action}), exc.status
+    except Exception:
+        app.logger.exception("cloud command failed")
+        return jsonify({"error": "Cloud command failed; inspect controller logs", "action": action}), 502
 
 
 @app.get("/healthz")
