@@ -4,6 +4,8 @@ import pytest
 from scripts.sewer_ml_pipeline.cloud_wrc_evaluate import parse_rows, truth
 from scripts.sewer_ml_pipeline.cloud_wrc_train import (
     class_positive_weights,
+    configure_controlled_unfreeze,
+    require_gpu,
     should_unfreeze_backbone_layer,
 )
 
@@ -44,3 +46,37 @@ def test_controlled_unfreezing_targets_only_top_backbone_blocks():
     assert should_unfreeze_backbone_layer("block8_10_mixed")
     assert should_unfreeze_backbone_layer("conv_7b")
     assert not should_unfreeze_backbone_layer("block7a_branch_0")
+
+
+class FakeLayer:
+    def __init__(self, name):
+        self.name = name
+        self.trainable = False
+
+
+class FakeBatchNormalization(FakeLayer):
+    pass
+
+
+def test_controlled_unfreeze_supports_flattened_backbone():
+    layers = [
+        FakeLayer("block17_20_ac"),
+        FakeLayer("block8_10_mixed"),
+        FakeBatchNormalization("conv_7b_bn"),
+        FakeLayer("conv_7b"),
+        FakeLayer("sewerml_dense_logits"),
+    ]
+    model = type("Model", (), {"layers": layers})()
+
+    selected = configure_controlled_unfreeze(model, FakeBatchNormalization)
+
+    assert selected == ["block8_10_mixed", "conv_7b"]
+    assert [layer.trainable for layer in layers] == [False, True, False, True, True]
+
+
+def test_require_gpu_fails_closed_without_visible_gpu():
+    config = type("Config", (), {"list_physical_devices": staticmethod(lambda kind: [])})()
+    tensorflow = type("TensorFlow", (), {"config": config})()
+
+    with pytest.raises(RuntimeError, match="requires a visible GPU"):
+        require_gpu(tensorflow)

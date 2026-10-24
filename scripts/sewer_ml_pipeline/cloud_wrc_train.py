@@ -33,6 +33,25 @@ def class_positive_weights(items, cap=50.0):
 def should_unfreeze_backbone_layer(name):
     return 'block8' in name or name.startswith('conv_7b')
 
+def require_gpu(tf):
+    devices=tf.config.list_physical_devices('GPU')
+    if not devices:
+        raise RuntimeError('WRc training requires a visible GPU; refusing CPU fallback')
+    return [device.name for device in devices]
+
+def configure_controlled_unfreeze(model, batch_normalization_type):
+    """Unfreeze the flattened InceptionResNet tail while keeping its BN frozen."""
+    unfrozen=[]
+    for layer in model.layers:
+        if layer.name.startswith('sewerml_'):
+            layer.trainable=True
+            continue
+        enabled=should_unfreeze_backbone_layer(layer.name) and not isinstance(layer,batch_normalization_type)
+        layer.trainable=enabled
+        if enabled: unfrozen.append(layer.name)
+    if not unfrozen: raise RuntimeError('Controlled WRc backbone unfreezing selected no layers')
+    return unfrozen
+
 def merge_histories(*histories):
     keys=set().union(*(history.history for history in histories))
     return {key:[float(value) for history in histories for value in history.history.get(key,[])] for key in keys}
@@ -54,6 +73,7 @@ def main():
             output=model(tf.zeros((1,299,299,3),tf.float32),training=False)
             if tuple(output.shape)!=(1,len(TARGETS)): raise RuntimeError('WRc smoke output contract failed')
             print(json.dumps({'smoke':'SUCCEEDED','parameters':model.count_params(),'rights':decision})); return
+        gpu_devices=require_gpu(tf)
         split_uris={'train':a.train,'early_stop':a.early_stop,'threshold_tune':a.threshold_tune,'dev_report':a.dev_report}
         if any(not value for value in split_uris.values()) or not a.output_prefix: raise ValueError('Training splits and output prefix are required')
         split_rows={key:rows(client,value) for key,value in split_uris.items()}; verify_disjoint(split_rows)
@@ -78,18 +98,12 @@ def main():
         phase1_callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss',patience=3,restore_best_weights=True)]
         model.compile(optimizer=tf.keras.optimizers.Adam(5e-4),loss=weighted_binary_crossentropy,metrics=[tf.keras.metrics.AUC(multi_label=True,name='auc')])
         first=max(1,min(3,a.epochs//3)); history1=model.fit(train,validation_data=early,epochs=first,callbacks=phase1_callbacks)
-        backbone=model.get_layer('inception_resnet_v2'); backbone.trainable=True
-        unfrozen=[]
-        for layer in backbone.layers:
-            enabled=should_unfreeze_backbone_layer(layer.name) and not isinstance(layer,tf.keras.layers.BatchNormalization)
-            layer.trainable=enabled
-            if enabled: unfrozen.append(layer.name)
-        if not unfrozen: raise RuntimeError('Controlled WRc backbone unfreezing selected no layers')
+        unfrozen=configure_controlled_unfreeze(model,tf.keras.layers.BatchNormalization)
         phase2_callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss',patience=3,restore_best_weights=True)]
         model.compile(optimizer=tf.keras.optimizers.Adam(1e-5),loss=weighted_binary_crossentropy,metrics=[tf.keras.metrics.AUC(multi_label=True,name='auc')])
         history2=model.fit(train,validation_data=early,initial_epoch=first,epochs=a.epochs,callbacks=phase2_callbacks)
         out=Path(temp)/'out'; out.mkdir(); model.save(out/'model.keras',include_optimizer=False)
-        card={'model_id':'wrc-inceptionresnetv2-v3-candidate','config_id':a.config_id,'class_order':list(TARGETS),'split_counts':{k:len(v) for k,v in split_rows.items()},'class_positive_weights':{code:float(positive_weights[i]) for i,code in enumerate(TARGETS)},'unfrozen_backbone_layers':unfrozen,'production_approved':False,'approval_gate':'AWAITING_YOUR_APPROVAL','history':merge_histories(history1,history2)}
+        card={'model_id':'wrc-inceptionresnetv2-v3-candidate','config_id':a.config_id,'class_order':list(TARGETS),'split_counts':{k:len(v) for k,v in split_rows.items()},'class_positive_weights':{code:float(positive_weights[i]) for i,code in enumerate(TARGETS)},'gpu_devices':gpu_devices,'unfrozen_backbone_layers':unfrozen,'production_approved':False,'approval_gate':'AWAITING_YOUR_APPROVAL','history':merge_histories(history1,history2)}
         (out/'model_card.json').write_text(json.dumps(card,indent=2)); upload_tree(client,out,a.output_prefix)
         print(json.dumps({'trained':True,'output':a.output_prefix,'approval_gate':'AWAITING_YOUR_APPROVAL'}))
 if __name__=='__main__': main()
