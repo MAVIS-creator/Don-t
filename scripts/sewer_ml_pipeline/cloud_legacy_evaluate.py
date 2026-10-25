@@ -82,7 +82,12 @@ def infer(session: ort.InferenceSession, rows: list[dict[str, str]], images: Pat
         if result.shape != (len(spec["class_codes"]),) or not np.isfinite(result).all():
             raise RuntimeError(f"Invalid output from {spec['name']}: {result.shape}")
         if spec["kind"] == "sewerml_multilabel_sigmoid":
-            if (result < 0).any() or (result > 1).any():
+            activation = spec.get("output_activation", "probability")
+            if activation == "logits":
+                result = 1 / (1 + np.exp(-np.clip(result, -60, 60)))
+            elif activation != "probability":
+                raise RuntimeError(f"Unknown activation for {spec['name']}: {activation}")
+            elif (result < 0).any() or (result > 1).any():
                 raise RuntimeError(f"{spec['name']} did not emit probabilities")
         elif (result < 0).any() or abs(float(result.sum()) - 1.0) > 0.01:
             raise RuntimeError("Original WRc output is not a normalized softmax")
