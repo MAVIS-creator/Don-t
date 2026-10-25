@@ -1,0 +1,75 @@
+steps:
+- name: python:3.11-slim
+  id: prepare-runtime
+  entrypoint: bash
+  args: [-c, "python -m pip install --no-cache-dir --target=/workspace/archive-deps google-cloud-storage requests"]
+- name: python:3.11-slim
+  id: train01
+  waitFor: [prepare-runtime]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train01.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train01.zip --output=/workspace/train01.json"]
+- name: python:3.11-slim
+  id: train02
+  waitFor: [prepare-runtime]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train02.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train02.zip --output=/workspace/train02.json"]
+- name: python:3.11-slim
+  id: train03
+  waitFor: [prepare-runtime]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train03.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train03.zip --output=/workspace/train03.json"]
+- name: python:3.11-slim
+  id: train04
+  waitFor: [prepare-runtime]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train04.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train04.zip --output=/workspace/train04.json"]
+- name: python:3.11-slim
+  id: train05
+  waitFor: [train01, train02, train03, train04]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train05.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train05.zip --output=/workspace/train05.json"]
+- name: python:3.11-slim
+  id: train06
+  waitFor: [train01, train02, train03, train04]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train06.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train06.zip --output=/workspace/train06.json"]
+- name: python:3.11-slim
+  id: train07
+  waitFor: [train01, train02, train03, train04]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train07.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train07.zip --output=/workspace/train07.json"]
+- name: python:3.11-slim
+  id: train08
+  waitFor: [train01, train02, train03, train04]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train08.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train08.zip --output=/workspace/train08.json"]
+- name: python:3.11-slim
+  id: train09
+  waitFor: [train05, train06, train07, train08]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train09.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train09.zip --output=/workspace/train09.json"]
+- name: python:3.11-slim
+  id: train10
+  waitFor: [train05, train06, train07, train08]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train10.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train10.zip --output=/workspace/train10.json"]
+- name: python:3.11-slim
+  id: train11
+  waitFor: [train05, train06, train07, train08]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train11.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train11.zip --output=/workspace/train11.json"]
+- name: python:3.11-slim
+  id: train12
+  waitFor: [train05, train06, train07, train08]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train12.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train12.zip --output=/workspace/train12.json"]
+- name: python:3.11-slim
+  id: train13
+  waitFor: [train09, train10, train11, train12]
+  entrypoint: bash
+  args: [-c, "PYTHONPATH=/workspace/archive-deps python scripts/sewer_ml_pipeline/stage_remote_archive.py --reuse-existing --url='https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train13.zip' --project=$PROJECT_ID --bucket=joint-inspection-510310-data --object=datasets/sewer-ml/source/archives/train13.zip --output=/workspace/train13.json"]
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 30
+timeout: 21600s
