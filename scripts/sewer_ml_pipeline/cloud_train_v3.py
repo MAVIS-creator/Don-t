@@ -2,7 +2,7 @@
 
 The worker downloads only objects named by immutable split manifests, verifies every
 image digest, invokes the native trainer, validates its required outputs, and uploads
-the research candidate with create-only GCS preconditions. It never reads locked-test
+the trained model with create-only GCS preconditions. It never reads locked-test
 data and never permits a workstation execution path.
 """
 from __future__ import annotations
@@ -148,7 +148,7 @@ def artifact_inventory(output: Path) -> list[dict]:
         raise RuntimeError(f"Missing training artifacts: {missing}")
     card = json.loads((output / "model_card.json").read_text())
     if card.get("production_approved") is not False or card.get("locked_test_evaluated") is not False:
-        raise RuntimeError("Research-candidate safety flags are invalid")
+        raise RuntimeError("Model safety flags are invalid")
     return [
         {"name": path.name, "bytes": path.stat().st_size, "sha256": sha256_file(path)}
         for path in sorted(output.iterdir()) if path.is_file() and path.name != "resume.pt"
@@ -233,10 +233,16 @@ def run(args) -> None:
             "artifacts": inventory, "production_approved": False,
             "locked_test_evaluated": False,
         }
-        (output / "candidate_manifest.json").write_text(json.dumps(provenance, indent=2))
+        manifest_path = output / "training_manifest.json"
+        manifest_path.write_text(json.dumps(provenance, indent=2))
+        inventory.append({
+            "name": manifest_path.name,
+            "bytes": manifest_path.stat().st_size,
+            "sha256": sha256_file(manifest_path),
+        })
         publish_artifacts(output, client, out_bucket, out_prefix, args.config_id, inventory)
         print(json.dumps({"uploaded": True, "output_prefix": args.output_prefix,
-                          "artifacts": len(inventory) + 1, "production_approved": False}))
+                          "artifacts": len(inventory), "production_approved": False}))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

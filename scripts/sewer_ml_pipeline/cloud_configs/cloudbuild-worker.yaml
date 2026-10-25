@@ -1,18 +1,31 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-worker'
     args:
       - 'build'
       - '-t'
-      - 'europe-west2-docker.pkg.dev/joint-inspection-510310/joint-inspection-training/v3:latest'
+      - 'europe-west2-docker.pkg.dev/$PROJECT_ID/joint-inspection-training/v3:$BUILD_ID'
       - '-f'
       - 'scripts/sewer_ml_pipeline/cloud_configs/v3-worker.Dockerfile'
       - '.'
   - name: 'gcr.io/cloud-builders/docker'
+    id: 'cpu-smoke-convnext-tiny'
+    entrypoint: 'docker'
+    args:
+      - 'run'
+      - '--rm'
+      - '--entrypoint'
+      - 'python'
+      - 'europe-west2-docker.pkg.dev/$PROJECT_ID/joint-inspection-training/v3:$BUILD_ID'
+      - 'scripts/sewer_ml_pipeline/smoke_v3_model.py'
+      - '--architecture=convnext_tiny'
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-worker'
     args:
       - 'push'
-      - 'europe-west2-docker.pkg.dev/joint-inspection-510310/joint-inspection-training/v3:latest'
+      - 'europe-west2-docker.pkg.dev/$PROJECT_ID/joint-inspection-training/v3:$BUILD_ID'
 images:
-  - 'europe-west2-docker.pkg.dev/joint-inspection-510310/joint-inspection-training/v3:latest'
+  - 'europe-west2-docker.pkg.dev/$PROJECT_ID/joint-inspection-training/v3:$BUILD_ID'
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8

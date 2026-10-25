@@ -11,6 +11,11 @@ def test_efficientnet_v3_head_is_9_multilabel_logits():
     with torch.no_grad(): output=model(torch.zeros(1,3,64,64))
     assert output.shape==(1,9)
 
+def test_convnext_tiny_v3_head_is_9_multilabel_logits():
+    model=make_model('convnext_tiny',pretrained=False).eval()
+    with torch.no_grad(): output=model(torch.zeros(1,3,64,64))
+    assert output.shape==(1,9)
+
 def test_group_overlap_across_train_and_tuning_disallowed():
     rows={'train':[{'Filename':'a','video_id':'sequence-one'}],
           'early_stop':[{'Filename':'b','video_id':'sequence-two'}],

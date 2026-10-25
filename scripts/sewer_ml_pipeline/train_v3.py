@@ -1,7 +1,7 @@
-"""Sewer-ML v3 research trainer. GCP worker only; never reads final locked test.
+"""Sewer-ML v3 trainer. GCP worker only; never reads final locked test.
 
 Early-stop validation, threshold tuning and development-report evaluation are fully
-separate GROUPS. The script writes non-production candidate artifacts to its output.
+separate GROUPS. The script writes evaluation-gated model artifacts to its output.
 """
 from __future__ import annotations
 import argparse
@@ -187,7 +187,7 @@ def run(args):
     thresholds=tune_thresholds(tune_true,tune_prob)
     dev_true,dev_prob=probabilities(model,val_loaders['dev_report'],device)
     report=complete_report(dev_true,dev_prob,TARGETS,thresholds)
-    report.update({'version':'sewer-condition-v3-research','production_approved':False,
+    report.update({'version':'sewer-condition-v3','production_approved':False,
                    'tuning_count':len(tune_true),'early_stop_count':len(splits['early_stop']),
                    'development_report_count':len(dev_true),'locked_test_evaluated':False})
     (out/'metrics.json').write_text(json.dumps(report,indent=2))
@@ -206,7 +206,7 @@ def run(args):
     parity=float(np.max(np.abs(native-exported)))
     if not np.isfinite(parity) or parity>1e-4:raise RuntimeError(f'ONNX parity failed: {parity}')
     digest=sha256(onnx_path)
-    metadata={'version':'sewer-condition-v3-research','architecture':args.architecture,
+    metadata={'version':'sewer-condition-v3','architecture':args.architecture,
               'class_order':list(TARGETS),'training_rows':len(splits['train']),
               'split_counts':{k:len(v) for k,v in splits.items()},
               'split_csv_sha256':{k:sha256(getattr(args,k)) for k in splits},
