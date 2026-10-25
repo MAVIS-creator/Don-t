@@ -159,6 +159,12 @@ def select_rows(
         ],
         "commercial_training_rights": "UNVERIFIED",
         "production_use_rights": "UNVERIFIED",
+        "research_program_authorization": "OWNER_AUTHORIZED_NONCOMMERCIAL_RESEARCH",
+        "research_use_scope": [
+            "dataset preparation and integrity analysis",
+            "non-commercial model training and fine-tuning",
+            "calibration, validation, benchmarking, and experimental optimization",
+        ],
         "training_ready": False,
         "remaining_gates": [
             "attach verifiable authorization evidence and determine its granted uses",
