@@ -1,24 +1,46 @@
-# Explicitly billable operation. Do NOT run until budget authorization is verified.
+# Explicitly billable. Trigger only through the reviewed /code Cloud Build control.
 substitutions:
   _STAGE: '20000'
   _OUTPUT_PREFIX: 'datasets/sewer-ml/curated-v4/20k'
+  _ARCHIVE_URL: 'https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train00.zip'
+  _ARCHIVE_OBJECT: 'datasets/sewer-ml/source/archives/train00.zip'
 steps:
   - name: 'python:3.11-slim'
-    id: cloud-only-staged-curation
+    id: stage-approved-zip-in-gcs
     entrypoint: bash
     args:
       - '-c'
       - |
         set -euo pipefail
-        python -m venv /workspace/venv
-        /workspace/venv/bin/python -m pip install --no-cache-dir google-cloud-storage requests 'pillow>=10,<14'
-        /workspace/venv/bin/python scripts/sewer_ml_pipeline/curate_staged.py --project=joint-inspection-510310 --stage=${_STAGE} --reserve=6000 --output-prefix=${_OUTPUT_PREFIX} --gcs-archive-generation=1792401703914215 --max-source-bytes=17179869184 --allow-unverified-split --execute
+        python -m pip install --no-cache-dir google-cloud-storage requests
+        python scripts/sewer_ml_pipeline/stage_remote_archive.py \
+          --url="${_ARCHIVE_URL}" \
+          --project="$PROJECT_ID" \
+          --bucket="joint-inspection-510310-data" \
+          --object="${_ARCHIVE_OBJECT}" \
+          --output=/workspace/staged-archive.json
+  - name: 'python:3.11-slim'
+    id: curate-staged-images
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        python -m pip install --no-cache-dir google-cloud-storage requests 'pillow>=10,<14'
+        generation="$(python -c 'import json; print(json.load(open("/workspace/staged-archive.json"))["generation"])')"
+        python scripts/sewer_ml_pipeline/curate_staged.py \
+          --project="$PROJECT_ID" \
+          --bucket="joint-inspection-510310-data" \
+          --stage="${_STAGE}" \
+          --reserve=6000 \
+          --output-prefix="${_OUTPUT_PREFIX}" \
+          --gcs-archive="${_ARCHIVE_OBJECT}" \
+          --gcs-archive-generation="$generation" \
+          --max-source-bytes=17179869184 \
+          --allow-unverified-split \
+          --execute
 options:
-  # LEGACY keeps Cloud Logging while also making the complete step log available
-  # through the Cloud Storage-backed `gcloud builds log` path.
   logging: LEGACY
-  # The curator is sequential and GCS-bound; the standard worker is cheaper
-  # than high-CPU while preserving the same 8 GiB memory envelope.
   machineType: E2_STANDARD_2
   diskSizeGb: 20
 timeout: 14400s

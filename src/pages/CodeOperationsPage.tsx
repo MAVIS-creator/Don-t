@@ -69,6 +69,8 @@ const save = (name: string, content: string, type = "text/plain") => {
   link.click();
   URL.revokeObjectURL(url);
 };
+const downloadName = (prefix: string, extension: string) =>
+  `${prefix}-${new Date().toISOString().replace(/[:.]/g, "-")}.${extension}`;
 
 export function CodeOperationsPage() {
   const [authorized, setAuthorized] = useState<boolean | null>(null),
@@ -115,17 +117,105 @@ export function CodeOperationsPage() {
     [source],
   );
   useEffect(() => {
-    void refresh();
+    const initial = window.setTimeout(() => void refresh(), 0);
     const timer = window.setInterval(() => void refresh(), 30000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
   }, [refresh]);
   useEffect(() => {
     if (authorized && view === "logs") {
-      void loadLogs();
+      const initial = window.setTimeout(() => void loadLogs(), 0);
       const timer = window.setInterval(() => void loadLogs(), 15000);
-      return () => window.clearInterval(timer);
+      return () => {
+        window.clearTimeout(initial);
+        window.clearInterval(timer);
+      };
     }
   }, [authorized, view, loadLogs]);
+  const inventory = async () => {
+    setBusy(true);
+    try {
+      const data = await api<Record<string, unknown>>("inventory");
+      setDiagnostic(data);
+      setView("diagnostics");
+      setError("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Inventory failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const github = async (kind: "inventory" | "dispatch" | "issue") => {
+    setBusy(true);
+    try {
+      if (kind === "inventory") {
+        setDiagnostic(await api<Record<string, unknown>>("github_inventory"));
+      } else if (kind === "dispatch") {
+        const workflow_id = window.prompt("Workflow filename or numeric workflow ID");
+        const ref = window.prompt("Approved branch or commit SHA");
+        if (!workflow_id || !ref) return;
+        const confirmation = window.prompt(`Type exactly to confirm:\ngithub_dispatch:${workflow_id}:${ref}`) || "";
+        setDiagnostic(await api<Record<string, unknown>>("github_dispatch", "POST", { workflow_id, ref, confirmation }));
+      } else {
+        const title = window.prompt("Issue title");
+        if (!title) return;
+        const body = window.prompt("Issue description") || "";
+        const confirmation = window.prompt(`Type exactly to confirm:\ngithub_issue:${title}`) || "";
+        setDiagnostic(await api<Record<string, unknown>>("github_issue", "POST", { title, body, confirmation }));
+      }
+      setView("diagnostics");
+      setError("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "GitHub operation failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const operate = async (action: string) => {
+    const target = window.prompt(`Target for ${action} (provider ID, service, job, or object path)`);
+    if (!target) return;
+    const payload: Record<string, unknown> = { action, target };
+    if (action.startsWith("run.") || action.startsWith("batch.")) {
+      const region = window.prompt("Allow-listed GCP region");
+      if (!region) return;
+      payload.region = region;
+    }
+    if (action === "build.trigger") payload.branch = window.prompt("Git branch", "main") || "main";
+    if (action === "run.rollback") payload.revision = window.prompt("Cloud Run revision name") || "";
+    if (action === "run.deploy_image") payload.image = window.prompt("Artifact Registry image URI") || "";
+    if (action === "batch.submit") payload.spec_object = window.prompt("Approved Batch JSON object path in the orchestration bucket") || "";
+    if (action === "storage.delete") payload.generation = Number(window.prompt("Exact GCS object generation") || "0");
+    if (action !== "storage.download") {
+      const expected = `${action}:${target}`;
+      payload.confirmation = window.prompt(`Type exactly to confirm:\n${expected}`) || "";
+    }
+    setBusy(true);
+    try {
+      const data = await api<Record<string, unknown>>("command", "POST", payload);
+      if (action === "storage.download") {
+        const result = data.provider_result as { filename?: string; content_type?: string; content_base64?: string } | undefined;
+        if (result?.content_base64) {
+          const bytes = Uint8Array.from(atob(result.content_base64), (value) => value.charCodeAt(0));
+          const url = URL.createObjectURL(new Blob([bytes], { type: result.content_type || "application/octet-stream" }));
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = result.filename || "artifact";
+          link.click();
+          URL.revokeObjectURL(url);
+        }
+      }
+      setDiagnostic(data);
+      setView("diagnostics");
+      setError("");
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Cloud operation failed");
+    } finally {
+      setBusy(false);
+    }
+  };
   const run = async () => {
     setBusy(true);
     try {
@@ -142,7 +232,7 @@ export function CodeOperationsPage() {
     try {
       const data = await api<Record<string, unknown>>("report");
       save(
-        `jointinspect-gcp-report-${Date.now()}.json`,
+        downloadName("jointinspect-gcp-report", "json"),
         JSON.stringify(data, null, 2),
         "application/json",
       );
@@ -363,7 +453,12 @@ export function CodeOperationsPage() {
   );
   const command = (id: string) => {
     if (id === "refresh") void refresh();
+    else if (id === "inventory") void inventory();
     else if (id === "preflight") void run();
+    else if (id === "github.inventory") void github("inventory");
+    else if (id === "github.dispatch") void github("dispatch");
+    else if (id === "github.issue") void github("issue");
+    else if (id.includes(".")) void operate(id);
     else if (id.endsWith("-logs")) {
       const next = id.split("-")[0] as typeof source;
       setSource(next);
@@ -379,11 +474,24 @@ export function CodeOperationsPage() {
       "Refresh GCP inventory",
       "Reload quota, campaign and Batch state",
     ],
+    ["inventory", "Open live GCP inventory", "Cloud Build, Cloud Run, Batch and Storage resources"],
     [
       "preflight",
       "Run guarded preflight",
       "Re-check quota, budget and duplicate-job gates",
     ],
+    ["build.trigger", "Trigger approved Cloud Build", "Run an existing trigger against an explicit branch"],
+    ["build.retry", "Retry Cloud Build", "Retry an existing build by exact build ID"],
+    ["build.cancel", "Cancel Cloud Build", "Cancel a running build by exact build ID"],
+    ["run.deploy_image", "Deploy Cloud Run image", "Update an allow-listed service to an Artifact Registry image"],
+    ["run.rollback", "Rollback Cloud Run", "Send 100% traffic to an explicit prior revision"],
+    ["batch.submit", "Submit approved Batch job", "Load a reviewed job specification from GCS"],
+    ["batch.cancel", "Cancel Batch job", "Cancel an exact job in an allow-listed region"],
+    ["storage.download", "Download GCS artifact", "Download an exact object up to 2 MiB"],
+    ["storage.delete", "Delete GCS object", "Generation-matched deletion with exact confirmation"],
+    ["github.inventory", "Review GitHub deployment inputs", "List open PRs and available Actions workflows"],
+    ["github.dispatch", "Deploy approved Git ref", "Dispatch a selected workflow for an explicit branch or commit"],
+    ["github.issue", "Create GitHub issue", "Record a reviewed operational problem in the repository"],
     [
       "build-logs",
       "Open Cloud Build logs",
@@ -477,7 +585,7 @@ export function CodeOperationsPage() {
             <button
               className="button button-secondary"
               onClick={() =>
-                save(`jointinspect-${source}-logs-${Date.now()}.txt`, logText)
+                save(downloadName(`jointinspect-${source}-logs`, "txt"), logText)
               }
               disabled={!logs.length}
             >
@@ -501,7 +609,7 @@ export function CodeOperationsPage() {
             onClick={() =>
               diagnostic &&
               save(
-                `jointinspect-diagnostics-${Date.now()}.txt`,
+                downloadName("jointinspect-diagnostics", "txt"),
                 JSON.stringify(diagnostic, null, 2),
               )
             }
@@ -594,7 +702,7 @@ export function CodeOperationsPage() {
           <div>
             <span className="code-eyebrow">Cloud operations · protected</span>
             <h1>Training operations</h1>
-            <p>GCP-backed status, logs, diagnostics and guarded controls.</p>
+            <p>Live GCP inventory, logs, diagnostics and confirmation-gated controls.</p>
           </div>
           <div className="code-actions">
             <button

@@ -1,0 +1,23 @@
+steps:
+- name: gcr.io/cloud-builders/docker
+  id: build-wrc-evaluator
+  args:
+  - build
+  - -f
+  - scripts/sewer_ml_pipeline/cloud_configs/wrc-worker.Dockerfile
+  - -t
+  - europe-west2-docker.pkg.dev/$PROJECT_ID/joint-inspection-training/wrc-evaluator:$BUILD_ID
+  - .
+- name: gcr.io/cloud-builders/docker
+  id: publish-wrc-evaluator
+  waitFor: [build-wrc-evaluator]
+  args:
+  - push
+  - europe-west2-docker.pkg.dev/$PROJECT_ID/joint-inspection-training/wrc-evaluator:$BUILD_ID
+images:
+- europe-west2-docker.pkg.dev/$PROJECT_ID/joint-inspection-training/wrc-evaluator:$BUILD_ID
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 50
+timeout: 1800s
