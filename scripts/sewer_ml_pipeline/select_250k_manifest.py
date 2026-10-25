@@ -75,9 +75,13 @@ def select_rows(
     rows: list[dict[str, str]], target: int = TARGET_SIZE, *,
     excluded_names: set[str] | None = None, seed: int = DEFAULT_SEED,
     frame_block: int = DEFAULT_FRAME_BLOCK, group_cap: int = DEFAULT_GROUP_CAP,
+    candidate_reserve: int = 0,
 ) -> tuple[list[dict], dict]:
     if target < 1:
         raise ValueError("Target must be positive")
+    if candidate_reserve < 0:
+        raise ValueError("Candidate reserve cannot be negative")
+    selection_target = target + candidate_reserve
     excluded = {name.casefold() for name in (excluded_names or set())}
     unique: dict[str, dict] = {}
     rejected = Counter()
@@ -101,8 +105,8 @@ def select_rows(
         row["source_group"] = proxy_group(filename, frame_block)
         unique[key] = row
     candidates = list(unique.values())
-    if len(candidates) < target:
-        raise ValueError(f"Only {len(candidates)} eligible unique rows for target {target}")
+    if len(candidates) < selection_target:
+        raise ValueError(f"Only {len(candidates)} eligible unique rows for target {selection_target}")
 
     counts = Counter(code for row in candidates for code in labels(row))
     rarity = {code: (len(candidates) / max(1, counts[code])) ** 0.55 for code in TARGETS}
@@ -123,17 +127,18 @@ def select_rows(
             continue
         selected.append({**row, "selection_score": f"{score:.12f}"})
         groups[group] += 1
-        if len(selected) == target:
+        if len(selected) == selection_target:
             break
-    if len(selected) != target:
-        raise ValueError(f"Proxy-group cap selected only {len(selected)} of {target}")
+    if len(selected) != selection_target:
+        raise ValueError(f"Proxy-group cap selected only {len(selected)} of {selection_target}")
 
     selected_counts = Counter(code for row in selected for code in labels(row))
     report = {
         "schema_version": 1,
         "status": "METADATA_SELECTED_IMAGE_INTEGRITY_PENDING",
         "target": target,
-        "selected": len(selected),
+        "candidate_reserve": candidate_reserve,
+        "selected_candidates": len(selected),
         "source_rows": len(rows),
         "eligible_unique_rows": len(candidates),
         "excluded_or_rejected": dict(rejected),

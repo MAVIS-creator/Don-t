@@ -38,3 +38,12 @@ def test_manifest_and_shard_plan_cover_every_selected_row():
 def test_proxy_group_is_stable_and_explicitly_a_proxy():
     assert proxy_group("00000199.png", 100) == "numeric-frame-block-100:00000001"
     assert proxy_group("odd-name.png", 100).startswith("filename-hash-block:")
+
+
+def test_candidate_reserve_provides_dedup_replacements():
+    selected, report = select_rows([row(i) for i in range(1, 301)], 100,
+                                   candidate_reserve=25, frame_block=10, group_cap=6)
+    assert len(selected) == 125
+    assert report["target"] == 100
+    assert report["candidate_reserve"] == 25
+    assert report["selected_candidates"] == 125

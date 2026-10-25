@@ -46,6 +46,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20261025)
     parser.add_argument("--frame-block", type=int, default=100)
     parser.add_argument("--group-cap", type=int, default=30)
+    parser.add_argument("--candidate-reserve", type=int, default=0)
     args = parser.parse_args()
     gcp_attestation(args.project)
     client = storage.Client(project=args.project)
@@ -53,7 +54,8 @@ def main() -> None:
     source = object_bytes(bucket, args.train_annotations)
     exclusions = reserved_names(bucket, args.reserve_object)
     selected, report = select_rows(parse_csv(source), args.target, excluded_names=exclusions,
-                                   seed=args.seed, frame_block=args.frame_block, group_cap=args.group_cap)
+                                   seed=args.seed, frame_block=args.frame_block, group_cap=args.group_cap,
+                                   candidate_reserve=args.candidate_reserve)
     report["source_annotation_uri"] = f"gs://{args.bucket}/{args.train_annotations}"
     report["source_annotation_sha256"] = hashlib.sha256(source).hexdigest()
     report["reserved_manifests"] = args.reserve_object
@@ -66,7 +68,8 @@ def main() -> None:
     report["outputs"] = outputs
     report_bytes = json.dumps(report, indent=2, sort_keys=True).encode()
     report_output = upload_create_only(bucket, f"{prefix}/selection_report.json", report_bytes, "application/json")
-    print(json.dumps({"selected": len(selected), "status": report["status"], "outputs": outputs + [report_output]}, indent=2))
+    print(json.dumps({"selected_candidates": len(selected), "final_target": args.target,
+                      "status": report["status"], "outputs": outputs + [report_output]}, indent=2))
 
 
 if __name__ == "__main__":
