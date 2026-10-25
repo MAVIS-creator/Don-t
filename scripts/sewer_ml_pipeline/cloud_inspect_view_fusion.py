@@ -21,6 +21,7 @@ from cloud_legacy_evaluate import (
 )
 from curate_staged import TARGETS, gcp_attestation, group_id, verify_disjoint
 from metrics_v3 import complete_report, metrics
+from select_250k_manifest import proxy_group
 
 
 MULTILABEL_MODELS = (
@@ -188,11 +189,21 @@ def run(args) -> None:
         dev_truth = truth(rows["dev_report"])
         tuning_groups = [group_id(row) for row in rows["threshold_tune"]]
         if any(not group for group in tuning_groups):
-            raise RuntimeError("Cross-validation requires source-group provenance for every tuning image")
-        folds = np.asarray([
-            int(hashlib.sha256(group.encode()).hexdigest()[:8], 16) % CV_FOLDS
-            for group in tuning_groups
-        ])
+            raise RuntimeError("Cross-validation requires provenance for every tuning image")
+        if len(set(tuning_groups)) >= CV_FOLDS:
+            cv_groups = tuning_groups
+            cv_grouping_strategy = "verified_source_group"
+        else:
+            # The historical v4 validation manifests expose one conservative
+            # `official_val_unsegmented` group. Keep nearby numeric frames together
+            # rather than pretending individual images are independent groups.
+            cv_groups = [proxy_group(row["Filename"]) for row in rows["threshold_tune"]]
+            cv_grouping_strategy = "numeric_filename_block_proxy_100"
+            if len(set(cv_groups)) < CV_FOLDS:
+                raise RuntimeError("Cross-validation proxy grouping did not produce enough groups")
+        ordered_groups = sorted(set(cv_groups), key=lambda group: hashlib.sha256(group.encode()).digest())
+        group_folds = {group: index % CV_FOLDS for index, group in enumerate(ordered_groups)}
+        folds = np.asarray([group_folds[group] for group in cv_groups])
         if set(folds.tolist()) != set(range(CV_FOLDS)):
             raise RuntimeError("Cross-validation fold assignment did not populate every fold")
         selections = {}
@@ -267,6 +278,7 @@ def run(args) -> None:
             "standalone_reports": standalone_reports, "acceptance_gate": acceptance,
             "ablations": ablations, "selected_models": selected_names,
             "model_sha256": model_hashes, "onnx_cpu_timings": timings,
+            "cross_validation_grouping": cv_grouping_strategy,
             "threshold_tuning_count": len(rows["threshold_tune"]),
             "development_report_count": len(rows["dev_report"]),
             "locked_test_evaluated": False, "production_approved": False,
