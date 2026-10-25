@@ -1,4 +1,4 @@
-"""Evaluate an adapted WRc candidate without retraining or touching locked test data."""
+"""Evaluate the adapted WRc model without retraining or touching locked test data."""
 from __future__ import annotations
 
 import argparse
@@ -149,7 +149,7 @@ def main() -> None:
         report.update(
             {
                 "schema_version": 1,
-                "model_id": "wrc-inceptionresnetv2-v3-candidate",
+                "model_id": "wrc-inceptionresnetv2-v3",
                 "config_id": args.config_id,
                 "model_uri": args.model,
                 "model_sha256": sha256(model_path),
