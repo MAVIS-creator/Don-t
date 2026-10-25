@@ -6,9 +6,9 @@ then evaluated once on dev_report. This script never reads the locked test split
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import tempfile
-from itertools import product
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +19,7 @@ from cloud_legacy_evaluate import (
     download, infer, read_manifest, split_gs, stage_images, truth, upload_create_only,
     write_predictions,
 )
-from curate_staged import TARGETS, gcp_attestation, verify_disjoint
+from curate_staged import TARGETS, gcp_attestation, group_id, verify_disjoint
 from metrics_v3 import complete_report, metrics
 
 
@@ -29,7 +29,9 @@ MULTILABEL_MODELS = (
 )
 ORIGINAL_WRC = "wrc-original"
 GRID_UNITS = 4  # convex weights in 0.25 increments
-MIN_BLEND_GAIN = 0.01
+MIN_BLEND_GAIN = 0.02
+CV_FOLDS = 5
+MIN_POSITIVES_FOR_BLEND = 20
 
 
 def compositions(total: int, length: int, prefix: tuple[int, ...] = ()):
@@ -50,37 +52,56 @@ def best_threshold(y_true: np.ndarray, probability: np.ndarray) -> tuple[float, 
     return best[3], best[4]
 
 
-def select_class_fusion(y_true: np.ndarray, probabilities: dict[str, np.ndarray]) -> dict:
+def cross_validated_score(y_true: np.ndarray, probability: np.ndarray, folds: np.ndarray) -> dict:
+    decisions = np.zeros(len(y_true), dtype=bool)
+    fold_thresholds = []
+    for fold in range(CV_FOLDS):
+        held_out = folds == fold
+        training = ~held_out
+        threshold, _ = best_threshold(y_true[training], probability[training])
+        decisions[held_out] = probability[held_out] >= threshold
+        fold_thresholds.append(threshold)
+    score = metrics(y_true.astype(bool), decisions)
+    score["fold_thresholds"] = fold_thresholds
+    return score
+
+
+def select_class_fusion(y_true: np.ndarray, probabilities: dict[str, np.ndarray], folds: np.ndarray) -> dict:
     names = tuple(probabilities)
     best_single = None
     for name in names:
-        threshold, score = best_threshold(y_true, probabilities[name])
-        candidate = (score["f1"], score["f2"], name, threshold, score)
+        cv_score = cross_validated_score(y_true, probabilities[name], folds)
+        threshold, tuning_score = best_threshold(y_true, probabilities[name])
+        candidate = (cv_score["f1"], cv_score["f2"], name, threshold, tuning_score, cv_score)
         if best_single is None or candidate[:2] > best_single[:2]:
             best_single = candidate
 
     best_blend = None
-    for units in compositions(GRID_UNITS, len(names)):
-        nonzero = sum(value > 0 for value in units)
-        if nonzero < 2:
-            continue
-        weights = np.asarray(units, dtype=np.float32) / GRID_UNITS
-        blended = sum(weights[index] * probabilities[name] for index, name in enumerate(names))
-        threshold, score = best_threshold(y_true, blended)
-        candidate = (score["f1"], score["f2"], -nonzero, tuple(units), threshold, score)
-        if best_blend is None or candidate[:3] > best_blend[:3]:
-            best_blend = candidate
+    if int(y_true.sum()) >= MIN_POSITIVES_FOR_BLEND:
+        for units in compositions(GRID_UNITS, len(names)):
+            nonzero = sum(value > 0 for value in units)
+            if nonzero != 2:
+                continue
+            weights = np.asarray(units, dtype=np.float32) / GRID_UNITS
+            blended = sum(weights[index] * probabilities[name] for index, name in enumerate(names))
+            cv_score = cross_validated_score(y_true, blended, folds)
+            threshold, tuning_score = best_threshold(y_true, blended)
+            candidate = (cv_score["f1"], cv_score["f2"], tuple(units), threshold, tuning_score, cv_score)
+            if best_blend is None or candidate[:2] > best_blend[:2]:
+                best_blend = candidate
 
     if best_blend and best_blend[0] >= best_single[0] + MIN_BLEND_GAIN:
-        units = best_blend[3]
+        units = best_blend[2]
         return {
             "weights": {name: units[index] / GRID_UNITS for index, name in enumerate(names) if units[index]},
-            "threshold": best_blend[4], "tuning_metrics": best_blend[5],
-            "selection": "blend", "minimum_required_gain": MIN_BLEND_GAIN,
+            "threshold": best_blend[3], "tuning_metrics": best_blend[4],
+            "cross_validated_metrics": best_blend[5],
+            "selection": "cross_validated_blend", "minimum_required_gain": MIN_BLEND_GAIN,
         }
     return {
         "weights": {best_single[2]: 1.0}, "threshold": best_single[3],
-        "tuning_metrics": best_single[4], "selection": "single_model",
+        "tuning_metrics": best_single[4], "cross_validated_metrics": best_single[5],
+        "selection": "cross_validated_single_model",
         "minimum_required_gain": MIN_BLEND_GAIN,
     }
 
@@ -165,17 +186,49 @@ def run(args) -> None:
 
         tune_truth = truth(rows["threshold_tune"])
         dev_truth = truth(rows["dev_report"])
+        tuning_groups = [group_id(row) for row in rows["threshold_tune"]]
+        if any(not group for group in tuning_groups):
+            raise RuntimeError("Cross-validation requires source-group provenance for every tuning image")
+        folds = np.asarray([
+            int(hashlib.sha256(group.encode()).hexdigest()[:8], 16) % CV_FOLDS
+            for group in tuning_groups
+        ])
+        if set(folds.tolist()) != set(range(CV_FOLDS)):
+            raise RuntimeError("Cross-validation fold assignment did not populate every fold")
         selections = {}
         for class_index, class_code in enumerate(TARGETS):
             candidates = {name: tune_predictions[name][:, class_index] for name in MULTILABEL_MODELS}
             if class_code == "FS":
                 candidates[ORIGINAL_WRC] = tune_predictions[ORIGINAL_WRC][:, 6]
-            selections[class_code] = select_class_fusion(tune_truth[:, class_index], candidates)
+            selections[class_code] = select_class_fusion(tune_truth[:, class_index], candidates, folds)
 
         tune_fused = fused_matrix(tune_predictions, selections)
         dev_fused = fused_matrix(dev_predictions, selections)
         thresholds = [selections[code]["threshold"] for code in TARGETS]
         development_report = complete_report(dev_truth, dev_fused, TARGETS, thresholds)
+
+        standalone_reports = {}
+        for name in MULTILABEL_MODELS:
+            standalone_thresholds = []
+            for class_index in range(len(TARGETS)):
+                threshold, _ = best_threshold(tune_truth[:, class_index], tune_predictions[name][:, class_index])
+                standalone_thresholds.append(threshold)
+            standalone_reports[name] = complete_report(
+                dev_truth, dev_predictions[name], TARGETS, standalone_thresholds,
+            )
+        best_standalone_name, best_standalone = max(
+            standalone_reports.items(), key=lambda item: (item[1]["macro_f1"], item[1]["macro_f2"]),
+        )
+        acceptance = {
+            "accepted": (
+                development_report["macro_f1"] > best_standalone["macro_f1"]
+                and development_report["macro_f2"] > best_standalone["macro_f2"]
+            ),
+            "rule": "fusion must strictly exceed strongest standalone macro_f1 and macro_f2 on dev_report",
+            "best_standalone_model": best_standalone_name,
+            "best_standalone_macro_f1": best_standalone["macro_f1"],
+            "best_standalone_macro_f2": best_standalone["macro_f2"],
+        }
 
         selected_names = sorted({name for selection in selections.values() for name in selection["weights"]})
         ablations = {}
@@ -211,6 +264,7 @@ def run(args) -> None:
             "schema_version": 1, "model_id": "inspect-view-development-prototype",
             "selection_split": "threshold_tune", "evaluation_split": "dev_report",
             "selection": selections, "development_report": development_report,
+            "standalone_reports": standalone_reports, "acceptance_gate": acceptance,
             "ablations": ablations, "selected_models": selected_names,
             "model_sha256": model_hashes, "onnx_cpu_timings": timings,
             "threshold_tuning_count": len(rows["threshold_tune"]),
@@ -221,6 +275,7 @@ def run(args) -> None:
         print(json.dumps({
             "built": True, "selected_models": selected_names,
             "macro_f1": development_report["macro_f1"], "macro_f2": development_report["macro_f2"],
+            "accepted": acceptance["accepted"],
             "output_prefix": args.output_prefix, "locked_test_evaluated": False,
         }, indent=2))
 

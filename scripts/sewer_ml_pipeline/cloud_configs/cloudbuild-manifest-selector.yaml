@@ -1,0 +1,17 @@
+steps:
+- name: gcr.io/cloud-builders/docker
+  id: build-manifest-selector
+  args: [build, -f, scripts/sewer_ml_pipeline/cloud_configs/manifest-selector.Dockerfile, -t, europe-west2-docker.pkg.dev/$PROJECT_ID/joint-inspection-training/manifest-selector:$BUILD_ID, .]
+- name: gcr.io/cloud-builders/docker
+  id: smoke-manifest-selector
+  entrypoint: docker
+  args: [run, --rm, europe-west2-docker.pkg.dev/$PROJECT_ID/joint-inspection-training/manifest-selector:$BUILD_ID, --help]
+- name: gcr.io/cloud-builders/docker
+  id: push-manifest-selector
+  args: [push, europe-west2-docker.pkg.dev/$PROJECT_ID/joint-inspection-training/manifest-selector:$BUILD_ID]
+images:
+- europe-west2-docker.pkg.dev/$PROJECT_ID/joint-inspection-training/manifest-selector:$BUILD_ID
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+timeout: 1800s
