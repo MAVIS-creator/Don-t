@@ -1,0 +1,40 @@
+{
+  "taskGroups": [{
+    "taskCount": 1,
+    "parallelism": 1,
+    "taskSpec": {
+      "runnables": [{
+        "container": {
+          "imageUri": "europe-west2-docker.pkg.dev/joint-inspection-510310/joint-inspection-training/manifest-selector@sha256:f8e3b188b3510105139c5482d8c4987d3f63a2feac0515d0e2dcf2ae98a06e67",
+          "entrypoint": "python",
+          "commands": [
+            "scripts/sewer_ml_pipeline/cloud_select_250k_manifest.py",
+            "--project=joint-inspection-510310",
+            "--bucket=joint-inspection-510310-data",
+            "--train-annotations=datasets/sewer-ml/original-annotations/SewerML_Train.csv",
+            "--reserve-object=datasets/sewer-ml/curated-v4/20k/splits/train.csv",
+            "--reserve-object=datasets/sewer-ml/curated-v4/20k/splits/early_stop.csv",
+            "--reserve-object=datasets/sewer-ml/curated-v4/20k/splits/threshold_tune.csv",
+            "--reserve-object=datasets/sewer-ml/curated-v4/20k/splits/dev_report.csv",
+            "--output-prefix=datasets/sewer-ml/selection-250k/v2-reserve50k-20261025",
+            "--target=250000",
+            "--candidate-reserve=50000",
+            "--seed=20261025",
+            "--frame-block=100",
+            "--group-cap=30"
+          ]
+        }
+      }],
+      "computeResource": {"cpuMilli": 8000, "memoryMib": 28672},
+      "maxRunDuration": "3600s",
+      "maxRetryCount": 0
+    }
+  }],
+  "allocationPolicy": {
+    "location": {"allowedLocations": ["regions/us-central1"]},
+    "instances": [{"policy": {"machineType": "e2-standard-8", "bootDisk": {"type": "pd-balanced", "sizeGb": 50}, "provisioningModel": "STANDARD"}}],
+    "serviceAccount": {"email": "joint-inspection-trainer@joint-inspection-510310.iam.gserviceaccount.com"}
+  },
+  "labels": {"campaign": "sewerml-250k-metadata-selection"},
+  "logsPolicy": {"destination": "CLOUD_LOGGING"}
+}
