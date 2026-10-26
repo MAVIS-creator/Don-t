@@ -1,0 +1,38 @@
+{
+  "taskGroups": [{
+    "taskCount": 1,
+    "parallelism": 1,
+    "taskSpec": {
+      "runnables": [{
+        "container": {
+          "imageUri": "europe-west2-docker.pkg.dev/joint-inspection-510310/joint-inspection-training/manifest-selector@sha256:ac33ca0da73894dd8c66a00592007a089fa320338f1e3368161c3d7a1143f4e9",
+          "entrypoint": "python",
+          "commands": [
+            "scripts/sewer_ml_pipeline/stage_remote_archive.py",
+            "--reuse-existing",
+            "--url=https://sciencedata.dk/public/Large%20AAU%20files/Sewer_ML/train01.zip",
+            "--project=joint-inspection-510310",
+            "--bucket=joint-inspection-510310-data",
+            "--object=datasets/sewer-ml/source/archives/train01.zip",
+            "--output=/tmp/train01.json"
+          ]
+        },
+        "environment": {
+          "secretVariables": {
+            "SEWER_ML_DOWNLOAD_PASSWORD": "projects/joint-inspection-510310/secrets/sewer-ml-download-password/versions/latest"
+          }
+        }
+      }],
+      "computeResource": {"cpuMilli": 4000, "memoryMib": 15360},
+      "maxRunDuration": "7200s",
+      "maxRetryCount": 0
+    }
+  }],
+  "allocationPolicy": {
+    "location": {"allowedLocations": ["regions/us-central1"]},
+    "instances": [{"policy": {"machineType": "e2-standard-4", "bootDisk": {"type": "pd-balanced", "sizeGb": 30}, "provisioningModel": "STANDARD"}}],
+    "serviceAccount": {"email": "joint-inspection-trainer@joint-inspection-510310.iam.gserviceaccount.com"}
+  },
+  "labels": {"campaign": "sewerml-archive-staging"},
+  "logsPolicy": {"destination": "CLOUD_LOGGING"}
+}
